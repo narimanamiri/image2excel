@@ -1,13 +1,11 @@
-
-import argparse
 from pathlib import Path
 import string
-
 import cv2
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font
+import easyocr
 
 MAX_SIZE = (200, 477)  # max image dimension (height, width)
                        # these dims make the image look great at 20% zoom
@@ -15,20 +13,22 @@ ROW_HEIGHT = 5
 COL_WIDTH = 2.45  # sets column width to 1.67, which is optimal  (not sure why)
 FONT_SIZE = 2
 
+def main():
+    # Get the current directory
+    directory = Path(__file__).parent
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Convert an image to an '
-                                                 'excel spreadsheet.')
-    parser.add_argument('image', type=str, help='the filepath of the image')
-    parser.add_argument('-o', '--output', required=False, type=str, 
-                        help='the xlsx filepath to output')
-    return vars(parser.parse_args())
+    # Get all image files in the directory
+    image_files = list(directory.glob('*.jpg')) + list(directory.glob('*.png')) + list(directory.glob('*.jpeg'))
 
+    if not image_files:
+        raise Exception(f'No images found in directory "{directory}".')
 
-def main(image, output=None):
+    for image in image_files:
+        process_image(image, directory)
 
+def process_image(image, output):
     # Load the image
-    img = cv2.imread(image)
+    img = cv2.imread(str(image))
 
     if img is None:
         raise Exception(f'Failed to load image "{image}".')
@@ -39,20 +39,25 @@ def main(image, output=None):
     # Create a new workbook
     wb = Workbook(write_only=True)
     ws = wb.create_sheet(title='Image')
-    
+
     # Write the image data to the worksheet
     write_img_to_ws(img, ws)
 
     # Apply conditional formatting for the RGB colors
     apply_colors(ws, img.shape[0] * img.shape[2], img.shape[1])
 
-    # Name the output file after image if not specified
-    if output is None:
-        output = Path(image).stem + '.xlsx'
+    # Detect text using EasyOCR
+    reader = easyocr.Reader(['en'])
+    results = reader.readtext(img)
+
+    # Write detected text to the worksheet
+    write_text_to_ws(results, ws)
+
+    # Name the output file after image
+    output_file = Path(output) / (image.stem + '.xlsx')
 
     # Save the image
-    wb.save(output)
-
+    wb.save(output_file)
 
 def bound_image_to_size(img, size):
     """
@@ -80,7 +85,6 @@ def bound_image_to_size(img, size):
     else:
         scale = size[1] / img.shape[1]
         return cv2.resize(img, (size[1], int(img.shape[0] * scale)))
-
 
 def write_img_to_ws(img, ws):
     """
@@ -112,7 +116,6 @@ def write_img_to_ws(img, ws):
         for channel in range(img.shape[2] - 1, -1, -1):  # rgb channels
             ws.append([cell(x) for x in img[r, :, channel]])
 
-
 def apply_colors(ws, n_rows, n_cols):
     """
     Apply colors to the worksheet by conditional formatting.
@@ -134,7 +137,6 @@ def apply_colors(ws, n_rows, n_cols):
         )
         ws.conditional_formatting.add(f'A{r}:{end_col}{r}', rule)
 
-
 def get_col_name(n):
     """
     Gets the column base alphabet name from number.
@@ -154,7 +156,6 @@ def get_col_name(n):
 
     return col
 
-
 def iter_col_names(n_cols):
     """
     Iterates through column names.
@@ -170,6 +171,18 @@ def iter_col_names(n_cols):
     for i in range(1, n_cols + 1):
         yield get_col_name(i)
 
+def write_text_to_ws(results, ws):
+    """
+    Writes detected text to the given worksheet.
+
+    Args:
+        results: the detected text results from EasyOCR.
+        ws: the write-only worksheet.
+
+    """
+    for (bbox, text, prob) in results:
+        top_left = bbox[0]
+        ws.append([text])
 
 if __name__ == '__main__':
-    main(**parse_args())
+    main()
